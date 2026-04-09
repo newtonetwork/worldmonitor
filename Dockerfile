@@ -52,6 +52,7 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Nginx + supervisord configs
 COPY docker/nginx.conf /etc/nginx/nginx.conf.template
+COPY docker/nginx-security-headers.conf /etc/nginx/nginx-security-headers.conf
 COPY docker/supervisord.conf /etc/supervisor/conf.d/worldmonitor.conf
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

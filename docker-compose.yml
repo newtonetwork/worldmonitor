@@ -2,12 +2,14 @@
 # World Monitor — Docker / Podman Compose
 # =============================================================================
 # Self-contained stack: app + Redis + AIS relay.
+# Configured for Nick's homelab — infra-network, Pi-hole DNS, Ollama LLM.
 #
 # Quick start:
-#   cp .env.example .env        # add your API keys
+#   cp .env.example .env        # already done — .env is pre-configured
 #   docker compose up -d --build
 #
 # The app will be available at http://localhost:3000
+# Put it behind Caddy with your infra subdomain for TLS.
 # =============================================================================
 
 services:
@@ -21,16 +23,19 @@ services:
     ports:
       - "${WM_PORT:-3000}:8080"
     environment:
+      NODE_ENV: "production"
       UPSTASH_REDIS_REST_URL: "http://redis-rest:80"
-      UPSTASH_REDIS_REST_TOKEN: "${REDIS_TOKEN:-wm-local-token}"
+      UPSTASH_REDIS_REST_TOKEN: "${REDIS_TOKEN}"
       LOCAL_API_PORT: "46123"
       LOCAL_API_MODE: "docker"
       LOCAL_API_CLOUD_FALLBACK: "false"
       WS_RELAY_URL: "http://ais-relay:3004"
-      # LLM provider (any OpenAI-compatible endpoint)
-      LLM_API_URL: "${LLM_API_URL:-}"
-      LLM_API_KEY: "${LLM_API_KEY:-}"
-      LLM_MODEL: "${LLM_MODEL:-}"
+      # Local Ollama — reaches the ollama container on infra-network
+      LLM_API_URL: "${LLM_API_URL:-http://ollama:11434/v1}"
+      LLM_API_KEY: "${LLM_API_KEY:-ollama}"
+      LLM_MODEL: "${LLM_MODEL:-llama3.1:8b}"
+      OLLAMA_API_URL: "${OLLAMA_API_URL:-http://ollama:11434}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-llama3.1:8b}"
       GROQ_API_KEY: "${GROQ_API_KEY:-}"
       # Data source API keys (optional — features degrade gracefully)
       AISSTREAM_API_KEY: "${AISSTREAM_API_KEY:-}"
@@ -41,21 +46,16 @@ services:
       NASA_FIRMS_API_KEY: "${NASA_FIRMS_API_KEY:-}"
       CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:-}"
       AVIATIONSTACK_API: "${AVIATIONSTACK_API:-}"
-    # Docker secrets (recommended for API keys — keeps them out of docker inspect).
-    # Create secrets/ dir with one file per key, then uncomment below.
-    # See SELF_HOSTING.md or docker-compose.override.yml for details.
-    # secrets:
-    #   - GROQ_API_KEY
-    #   - AISSTREAM_API_KEY
-    #   - FINNHUB_API_KEY
-    #   - FRED_API_KEY
-    #   - NASA_FIRMS_API_KEY
-    #   - LLM_API_KEY
+    dns:
+      - 10.0.2.46
+      - 8.8.8.8
     depends_on:
       redis-rest:
         condition: service_started
       ais-relay:
         condition: service_started
+    networks:
+      - infra-network
     restart: unless-stopped
 
   ais-relay:
@@ -67,14 +67,20 @@ services:
     environment:
       AISSTREAM_API_KEY: "${AISSTREAM_API_KEY:-}"
       PORT: "3004"
-    restart: unless-stopped
+    networks:
+      - infra-network
+    # restart: no when AISSTREAM_API_KEY is unset — relay exits cleanly without it.
+    # Set AISSTREAM_API_KEY in .env and run: docker compose up -d ais-relay
+    restart: "no"
 
   redis:
     image: docker.io/redis:7-alpine
     container_name: worldmonitor-redis
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis-data:/data
+    networks:
+      - infra-network
     restart: unless-stopped
 
   redis-rest:
@@ -86,27 +92,17 @@ services:
     ports:
       - "127.0.0.1:8079:80"
     environment:
-      SRH_TOKEN: "${REDIS_TOKEN:-wm-local-token}"
-      SRH_CONNECTION_STRING: "redis://redis:6379"
+      SRH_TOKEN: "${REDIS_TOKEN}"
+      SRH_CONNECTION_STRING: "redis://:${REDIS_PASSWORD}@redis:6379"
     depends_on:
       - redis
+    networks:
+      - infra-network
     restart: unless-stopped
-
-# Docker secrets — uncomment and point to your secret files.
-# Example: echo "gsk_abc123" > secrets/groq_api_key.txt
-# secrets:
-#   GROQ_API_KEY:
-#     file: ./secrets/groq_api_key.txt
-#   AISSTREAM_API_KEY:
-#     file: ./secrets/aisstream_api_key.txt
-#   FINNHUB_API_KEY:
-#     file: ./secrets/finnhub_api_key.txt
-#   FRED_API_KEY:
-#     file: ./secrets/fred_api_key.txt
-#   NASA_FIRMS_API_KEY:
-#     file: ./secrets/nasa_firms_api_key.txt
-#   LLM_API_KEY:
-#     file: ./secrets/llm_api_key.txt
 
 volumes:
   redis-data:
+
+networks:
+  infra-network:
+    external: true
